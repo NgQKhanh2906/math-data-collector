@@ -9,7 +9,10 @@
 - **2 chế độ thu thập nhãn (Ground Truth):**
   - **Đề bài gợi ý:** Tự động sinh biểu thức đa dạng (cơ bản `+ - * /`, số thập phân, ngoặc đơn, lũy thừa, căn bậc hai, phương trình bậc 1/2) để người dùng chép lại, đảm bảo nhãn sạch 100%.
   - **Viết tự do:** Người dùng tự viết biểu thức bất kỳ và nhập nhãn tương ứng (có nút chèn nhanh ký tự toán học hoặc tùy chọn lưu tạm không nhãn để gán sau).
-- **Đồng bộ Google Drive & Google Sheet:** Tự động lưu từng ảnh `math_YYYYMMDD_HHmmss_<id>.png` vào thư mục Google Drive và ghi thêm 1 dòng log vào Google Sheet `Math_Dataset_Labels` (xử lý an toàn các nhãn bắt đầu bằng `=`, `+`, `-`).
+- **Đồng bộ Google Drive & Google Sheet:** Tự động lưu từng ảnh `math_YYYYMMDD_HHmmss_<id>.png` vào thư mục Google Drive và ghi thêm 1 dòng log vào Google Sheet `Math_Dataset_Labels` (xử lý an toàn các nhãn bắt đầu bằng `=`, `+`, `-`, kèm cột `status` mặc định `PENDING` để bạn duyệt dữ liệu trước khi train AI).
+- **Hỗ trợ bảng vẽ điện tử & chống spam 2 lớp:**
+  - Hiển thị vòng tròn con trỏ đầu bút bám theo chuột và bút bảng vẽ điện tử (`pointerType === 'pen'`) ngay cả khi rê lơ lửng (hover) trên bảng.
+  - Chặn dữ liệu vô nghĩa và spam bằng tool ở cả Frontend (tối thiểu 2 nét, kiểm tra độ dài nét, diện tích phủ mực, thời gian vẽ, cooldown 4 giây, honeypot) và Google Apps Script Backend (giới hạn 6 mẫu/phút mỗi client và 35 mẫu/phút toàn hệ thống, kiểm tra header PNG `1200 x 500`, chặn trùng ảnh SHA-256).
 - **Hoạt động đa thiết bị:** Thiết kế responsive, hỗ trợ Pointer Events và khóa cuộn trang (`touch-action: none`) trên màn hình cảm ứng.
 
 ## Cấu trúc thư mục

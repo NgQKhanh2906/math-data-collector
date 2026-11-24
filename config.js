@@ -14,5 +14,12 @@
     UPLOAD_TIMEOUT_MS: 25000,
     DEFAULT_PEN_COLOR: "#111111",
     DEFAULT_PEN_SIZE: 6,
+    SUBMIT_COOLDOWN_MS: 4000,
+    MIN_DRAW_DURATION_MS: 600,
+    MIN_PEN_STROKES: 2,
+    MIN_TOTAL_INK_LENGTH: 45,
+    MIN_BBOX_WIDTH: 28,
+    MIN_BBOX_HEIGHT: 16,
+    MAX_INK_COVERAGE_RATIO: 0.35,
   });
 })(typeof window !== "undefined" ? window : globalThis);

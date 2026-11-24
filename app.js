@@ -1,5 +1,6 @@
 /**
- * Logic bảng vẽ chữ viết tay, xuất PNG nền trắng chuẩn và gửi dữ liệu lên Google Apps Script.
+ * Logic bảng vẽ chữ viết tay, con trỏ đầu bút trực quan, kiểm lọc chống spam
+ * và gửi dữ liệu PNG nền trắng chuẩn lên Google Apps Script.
  */
 (function () {
   'use strict';
@@ -10,7 +11,16 @@
   var EXPORT_WIDTH = Number(config.EXPORT_WIDTH) || 1200;
   var EXPORT_HEIGHT = Number(config.EXPORT_HEIGHT) || 500;
   var UPLOAD_TIMEOUT_MS = Number(config.UPLOAD_TIMEOUT_MS) || 25000;
+  var SUBMIT_COOLDOWN_MS = Number(config.SUBMIT_COOLDOWN_MS) || 4000;
+  var MIN_DRAW_DURATION_MS = Number(config.MIN_DRAW_DURATION_MS) || 600;
+  var MIN_PEN_STROKES = Number(config.MIN_PEN_STROKES) || 2;
+  var MIN_TOTAL_INK_LENGTH = Number(config.MIN_TOTAL_INK_LENGTH) || 45;
+  var MIN_BBOX_WIDTH = Number(config.MIN_BBOX_WIDTH) || 28;
+  var MIN_BBOX_HEIGHT = Number(config.MIN_BBOX_HEIGHT) || 16;
+  var MAX_INK_COVERAGE_RATIO = Number(config.MAX_INK_COVERAGE_RATIO) || 0.35;
+
   var SESSION_STORAGE_KEY = 'math_ink_session_count';
+  var CLIENT_ID_STORAGE_KEY = 'math_ink_client_id';
 
   var configWarningEl = document.getElementById('config-warning');
   var sessionCountEl = document.getElementById('session-count');
@@ -40,12 +50,15 @@
 
   var canvasStageEl = document.getElementById('canvas-stage');
   var canvasEl = document.getElementById('drawing-canvas');
+  var brushCursorEl = document.getElementById('brush-cursor');
+  var brushCursorCenterEl = brushCursorEl ? brushCursorEl.querySelector('.brush-cursor-center') : null;
   var canvasPlaceholderEl = document.getElementById('canvas-placeholder');
   var strokeCounterEl = document.getElementById('stroke-counter');
 
   var btnDownload = document.getElementById('btn-download');
   var btnSave = document.getElementById('btn-save');
   var btnSaveTextEl = btnSave.querySelector('.btn-save-text');
+  var honeypotInputEl = document.getElementById('website-hp');
   var toastContainerEl = document.getElementById('toast-container');
 
   var ctx = canvasEl.getContext('2d');
@@ -63,7 +76,16 @@
     currentStroke: null,
     activePointerId: null,
     isUploading: false,
-    sessionCount: 0
+    sessionCount: 0,
+    clientId: '',
+    totalDrawDurationMs: 0,
+    strokeStartTime: 0,
+    cooldownUntil: 0,
+    cooldownTimerId: null,
+    cursorVisible: false,
+    lastCursorStageX: 0,
+    lastCursorStageY: 0,
+    lastPointerType: 'mouse'
   };
 
   function isValidAppsScriptUrl(url) {
@@ -72,6 +94,34 @@
       url.indexOf('https://') === 0 &&
       url.indexOf('PASTE_YOUR_GOOGLE_APPS_SCRIPT') === -1
     );
+  }
+
+  function loadOrCreateClientId() {
+    var existing = '';
+    try {
+      existing = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY) || '';
+    } catch (err) {
+      existing = '';
+    }
+
+    if (/^[a-zA-Z0-9_-]{12,64}$/.test(existing)) {
+      state.clientId = existing;
+      return;
+    }
+
+    var generated =
+      'cid_' +
+      Date.now().toString(36) +
+      '_' +
+      Math.random().toString(36).slice(2, 12) +
+      Math.random().toString(36).slice(2, 6);
+
+    state.clientId = generated.slice(0, 32);
+    try {
+      window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, state.clientId);
+    } catch (err) {
+      // Bỏ qua khi trình duyệt chặn localStorage
+    }
   }
 
   function loadSessionCount() {
@@ -124,6 +174,88 @@
     var dx = p1.x - p2.x;
     var dy = p1.y - p2.y;
     return dx * dx + dy * dy;
+  }
+
+  function syncBrushCursorAppearance() {
+    if (!brushCursorEl) {
+      return;
+    }
+
+    var rect = canvasStageEl.getBoundingClientRect();
+    var logicalDia = state.tool === 'eraser' ? Math.max(state.penSize * 2.2, 16) : state.penSize;
+    var scale = (rect.width || EXPORT_WIDTH) / EXPORT_WIDTH;
+    var visualDia = Math.max(8, Math.round(logicalDia * scale));
+
+    brushCursorEl.style.width = visualDia + 'px';
+    brushCursorEl.style.height = visualDia + 'px';
+
+    if (state.tool === 'eraser') {
+      brushCursorEl.classList.add('is-eraser');
+      brushCursorEl.style.borderColor = '#4B5563';
+      if (brushCursorCenterEl) {
+        brushCursorCenterEl.style.backgroundColor = '#4B5563';
+      }
+    } else {
+      brushCursorEl.classList.remove('is-eraser');
+      brushCursorEl.style.borderColor = state.penColor;
+      if (brushCursorCenterEl) {
+        brushCursorCenterEl.style.backgroundColor = state.penColor;
+      }
+    }
+
+    brushCursorEl.style.transform =
+      'translate3d(' + state.lastCursorStageX + 'px, ' + state.lastCursorStageY + 'px, 0) translate(-50%, -50%)';
+  }
+
+  function hideBrushCursor() {
+    if (!brushCursorEl) {
+      return;
+    }
+    state.cursorVisible = false;
+    brushCursorEl.hidden = true;
+    canvasStageEl.classList.remove('has-custom-cursor');
+  }
+
+  function updateBrushCursorFromEvent(e) {
+    if (!brushCursorEl || !e) {
+      return;
+    }
+
+    if (e.pointerType) {
+      state.lastPointerType = e.pointerType;
+    }
+
+    if (e.pointerType === 'touch') {
+      hideBrushCursor();
+      return;
+    }
+
+    if (typeof e.clientX !== 'number' || typeof e.clientY !== 'number') {
+      return;
+    }
+
+    var stageRect = canvasStageEl.getBoundingClientRect();
+    var stageX = e.clientX - stageRect.left;
+    var stageY = e.clientY - stageRect.top;
+
+    if (stageX < 0 || stageY < 0 || stageX > stageRect.width || stageY > stageRect.height) {
+      hideBrushCursor();
+      return;
+    }
+
+    state.lastCursorStageX = stageX;
+    state.lastCursorStageY = stageY;
+
+    if (!state.cursorVisible) {
+      state.cursorVisible = true;
+      brushCursorEl.hidden = false;
+      canvasStageEl.classList.add('has-custom-cursor');
+      syncBrushCursorAppearance();
+      return;
+    }
+
+    brushCursorEl.style.transform =
+      'translate3d(' + stageX + 'px, ' + stageY + 'px, 0) translate(-50%, -50%)';
   }
 
   function renderStroke(targetCtx, stroke) {
@@ -210,9 +342,10 @@
     }
 
     renderCanvas();
+    syncBrushCursorAppearance();
   }
 
-  function exportWhiteboardPngDataUrl() {
+  function createExportOffscreenCanvas() {
     var offscreen = document.createElement('canvas');
     offscreen.width = EXPORT_WIDTH;
     offscreen.height = EXPORT_HEIGHT;
@@ -225,7 +358,49 @@
       renderStroke(offCtx, state.strokes[i]);
     }
 
-    return offscreen.toDataURL('image/png');
+    return offscreen;
+  }
+
+  function exportWhiteboardPngDataUrl() {
+    return createExportOffscreenCanvas().toDataURL('image/png');
+  }
+
+  function exportAndInspectWhiteboard() {
+    var offscreen = createExportOffscreenCanvas();
+    var offCtx = offscreen.getContext('2d');
+    var imgData = offCtx.getImageData(0, 0, EXPORT_WIDTH, EXPORT_HEIGHT).data;
+
+    var totalSamples = 0;
+    var inkSamples = 0;
+
+    for (var y = 0; y < EXPORT_HEIGHT; y += 2) {
+      for (var x = 0; x < EXPORT_WIDTH; x += 2) {
+        var idx = (y * EXPORT_WIDTH + x) * 4;
+        totalSamples += 1;
+        if (imgData[idx] < 245 || imgData[idx + 1] < 245 || imgData[idx + 2] < 245) {
+          inkSamples += 1;
+        }
+      }
+    }
+
+    if (inkSamples < 25) {
+      return {
+        valid: false,
+        message: 'Bảng vẽ gần như trống trắng (có thể bạn đã tẩy hết nét). Vui lòng viết lại biểu thức.'
+      };
+    }
+
+    if (totalSamples > 0 && inkSamples / totalSamples > MAX_INK_COVERAGE_RATIO) {
+      return {
+        valid: false,
+        message: 'Bảng vẽ bị tô kín bất thường, không giống biểu thức toán học. Vui lòng xóa bảng và viết lại.'
+      };
+    }
+
+    return {
+      valid: true,
+      dataUrl: offscreen.toDataURL('image/png')
+    };
   }
 
   function getPenStrokes() {
@@ -244,6 +419,95 @@
     return colors;
   }
 
+  function validateDrawingQuality(penStrokes) {
+    if (penStrokes.length < MIN_PEN_STROKES) {
+      return {
+        valid: false,
+        message: 'Biểu thức quá ngắn hoặc chỉ có 1 nét quẹt. Vui lòng viết biểu thức toán học đầy đủ.'
+      };
+    }
+
+    var totalInkLength = 0;
+    var minX = Infinity;
+    var maxX = -Infinity;
+    var minY = Infinity;
+    var maxY = -Infinity;
+
+    for (var i = 0; i < penStrokes.length; i += 1) {
+      var pts = penStrokes[i].points;
+      for (var j = 0; j < pts.length; j += 1) {
+        var pt = pts[j];
+        if (pt.x < minX) minX = pt.x;
+        if (pt.x > maxX) maxX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+        if (pt.y > maxY) maxY = pt.y;
+
+        if (j > 0) {
+          totalInkLength += Math.sqrt(distanceSquared(pts[j - 1], pt));
+        }
+      }
+    }
+
+    if (totalInkLength < MIN_TOTAL_INK_LENGTH) {
+      return {
+        valid: false,
+        message: 'Nét vẽ quá ít dữ liệu. Vui lòng viết biểu thức rõ ràng hơn.'
+      };
+    }
+
+    if (maxX - minX < MIN_BBOX_WIDTH || maxY - minY < MIN_BBOX_HEIGHT) {
+      return {
+        valid: false,
+        message: 'Vùng viết biểu thức quá nhỏ hoặc không hợp lệ. Vui lòng viết rõ chữ số và phép tính.'
+      };
+    }
+
+    if (state.totalDrawDurationMs < MIN_DRAW_DURATION_MS) {
+      return {
+        valid: false,
+        message: 'Thao tác vẽ quá nhanh bất thường. Vui lòng viết biểu thức cẩn thận trước khi gửi.'
+      };
+    }
+
+    return { valid: true };
+  }
+
+  function updateSaveButtonState() {
+    if (state.isUploading) {
+      btnSave.disabled = true;
+      btnSave.classList.add('is-loading');
+      btnSaveTextEl.textContent = 'Đang gửi dữ liệu...';
+      return;
+    }
+
+    btnSave.classList.remove('is-loading');
+    var remainingMs = state.cooldownUntil - Date.now();
+    if (remainingMs > 0) {
+      btnSave.disabled = true;
+      btnSaveTextEl.textContent = 'Chờ ' + Math.ceil(remainingMs / 1000) + 's...';
+    } else {
+      btnSave.disabled = false;
+      btnSaveTextEl.textContent = 'Lưu & Gửi dữ liệu';
+    }
+  }
+
+  function startSubmitCooldown() {
+    state.cooldownUntil = Date.now() + SUBMIT_COOLDOWN_MS;
+    if (state.cooldownTimerId !== null) {
+      window.clearInterval(state.cooldownTimerId);
+    }
+
+    updateSaveButtonState();
+    state.cooldownTimerId = window.setInterval(function () {
+      if (Date.now() >= state.cooldownUntil) {
+        window.clearInterval(state.cooldownTimerId);
+        state.cooldownTimerId = null;
+        state.cooldownUntil = 0;
+      }
+      updateSaveButtonState();
+    }, 250);
+  }
+
   function updateUiState() {
     var hasStrokes = state.strokes.length > 0;
     var isDrawingNow = state.currentStroke !== null;
@@ -255,6 +519,7 @@
 
     canvasPlaceholderEl.hidden = hasStrokes || isDrawingNow;
     strokeCounterEl.textContent = penCount + ' nét vẽ';
+    updateSaveButtonState();
   }
 
   function updatePenPreview() {
@@ -269,6 +534,8 @@
       var presetSize = Number(btn.getAttribute('data-size'));
       btn.classList.toggle('is-active', presetSize === state.penSize);
     });
+
+    syncBrushCursorAppearance();
   }
 
   function setPenColor(color) {
@@ -300,6 +567,7 @@
     toolEraserBtn.setAttribute('aria-pressed', !isPen ? 'true' : 'false');
 
     canvasEl.style.cursor = isPen ? 'crosshair' : 'cell';
+    syncBrushCursorAppearance();
   }
 
   function setPenSize(sizeValue) {
@@ -358,16 +626,15 @@
     state.strokes = [];
     state.redoStack = [];
     state.currentStroke = null;
+    state.totalDrawDurationMs = 0;
+    state.strokeStartTime = 0;
     renderCanvas();
     updateUiState();
   }
 
   function setUploading(loading) {
     state.isUploading = loading;
-    btnSave.disabled = loading;
     btnDownload.disabled = loading;
-    btnSave.classList.toggle('is-loading', loading);
-    btnSaveTextEl.textContent = loading ? 'Đang gửi dữ liệu...' : 'Lưu & Gửi dữ liệu';
     updateUiState();
   }
 
@@ -429,9 +696,26 @@
       return;
     }
 
+    if (Date.now() < state.cooldownUntil) {
+      showToast('Vui lòng chờ vài giây trước khi gửi mẫu tiếp theo.', 'info');
+      return;
+    }
+
+    var honeypotVal = honeypotInputEl ? honeypotInputEl.value : '';
+    if (honeypotVal && honeypotVal.trim() !== '') {
+      showToast('Yêu cầu bị từ chối.', 'error');
+      return;
+    }
+
     var penStrokes = getPenStrokes();
     if (penStrokes.length === 0) {
       showToast('Bảng vẽ đang trống. Vui lòng viết biểu thức trước khi lưu.', 'error');
+      return;
+    }
+
+    var qualityCheck = validateDrawingQuality(penStrokes);
+    if (!qualityCheck.valid) {
+      showToast(qualityCheck.message, 'error');
       return;
     }
 
@@ -445,6 +729,18 @@
         freeLabelInput.focus();
         return;
       }
+      if (label) {
+        if (label.length > 120) {
+          showToast('Nhãn biểu thức quá dài (tối đa 120 ký tự).', 'error');
+          freeLabelInput.focus();
+          return;
+        }
+        if (!/^[0-9a-zA-Z+\-*/^=().,\s<>[\]{}|\\]+$/.test(label) || !/[0-9+\-*/^=()]/.test(label)) {
+          showToast('Nhãn biểu thức chứa ký tự không hợp lệ hoặc không phải biểu thức toán học.', 'error');
+          freeLabelInput.focus();
+          return;
+        }
+      }
     }
 
     var appsScriptUrl = config.APPS_SCRIPT_URL;
@@ -453,16 +749,24 @@
       return;
     }
 
-    var dataUrl = exportWhiteboardPngDataUrl();
-    var imageBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+    var exportInspection = exportAndInspectWhiteboard();
+    if (!exportInspection.valid) {
+      showToast(exportInspection.message, 'error');
+      return;
+    }
+
+    var imageBase64 = exportInspection.dataUrl.replace(/^data:image\/png;base64,/, '');
     var payload = {
       secret: config.SHARED_SECRET || '',
+      clientId: state.clientId,
       imageBase64: imageBase64,
       label: label,
       mode: state.mode,
       penColorsUsed: getPenColorsUsed(penStrokes),
       strokeCount: penStrokes.length,
       penSize: state.penSize,
+      drawDurationMs: Math.round(state.totalDrawDurationMs),
+      honeypot: honeypotVal,
       clientTimestamp: new Date().toISOString(),
       viewport: window.innerWidth + 'x' + window.innerHeight
     };
@@ -509,6 +813,7 @@
         showToast('Đã lưu lên Drive: ' + (result.fileName || 'thanh cong'), 'success');
 
         clearBoard();
+        startSubmitCooldown();
         if (state.mode === 'prompt') {
           loadNextPrompt();
         } else {
@@ -533,6 +838,8 @@
   }
 
   function handlePointerDown(e) {
+    updateBrushCursorFromEvent(e);
+
     if (state.isUploading) {
       return;
     }
@@ -545,6 +852,8 @@
 
     e.preventDefault();
     state.activePointerId = e.pointerId;
+    state.strokeStartTime = state.tool === 'pen' ? Date.now() : 0;
+
     try {
       canvasEl.setPointerCapture(e.pointerId);
     } catch (err) {
@@ -565,6 +874,8 @@
   }
 
   function handlePointerMove(e) {
+    updateBrushCursorFromEvent(e);
+
     if (!state.currentStroke || e.pointerId !== state.activePointerId) {
       return;
     }
@@ -605,12 +916,27 @@
       // Bỏ qua nếu capture đã tự hủy
     }
 
+    if (state.currentStroke.tool === 'pen' && state.strokeStartTime > 0) {
+      state.totalDrawDurationMs += Math.min(Date.now() - state.strokeStartTime, 15000);
+    }
+    state.strokeStartTime = 0;
+
     state.strokes.push(state.currentStroke);
     state.currentStroke = null;
     state.activePointerId = null;
 
     renderCanvas();
     updateUiState();
+  }
+
+  function handleMouseMoveFallback(e) {
+    if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) {
+      return;
+    }
+    if (state.lastPointerType === 'touch') {
+      return;
+    }
+    updateBrushCursorFromEvent(e);
   }
 
   function isFormElementFocused(target) {
@@ -732,10 +1058,14 @@
     btnDownload.addEventListener('click', handleDownload);
     btnSave.addEventListener('click', handleSave);
 
+    canvasEl.addEventListener('pointerenter', updateBrushCursorFromEvent);
+    canvasEl.addEventListener('pointerleave', hideBrushCursor);
     canvasEl.addEventListener('pointerdown', handlePointerDown);
     canvasEl.addEventListener('pointermove', handlePointerMove);
     canvasEl.addEventListener('pointerup', finishStroke);
     canvasEl.addEventListener('pointercancel', finishStroke);
+    canvasEl.addEventListener('mousemove', handleMouseMoveFallback);
+    canvasEl.addEventListener('mouseleave', hideBrushCursor);
 
     document.addEventListener('keydown', handleKeyDown);
 
@@ -751,6 +1081,7 @@
 
   function init() {
     configWarningEl.hidden = isValidAppsScriptUrl(config.APPS_SCRIPT_URL);
+    loadOrCreateClientId();
     loadSessionCount();
     loadNextPrompt();
     setPenColor(state.penColor);

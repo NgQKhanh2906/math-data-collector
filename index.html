@@ -266,6 +266,9 @@
         <div class="canvas-stage" id="canvas-stage">
           <canvas id="drawing-canvas" aria-label="Bảng vẽ biểu thức toán học nền trắng"></canvas>
           <div class="canvas-grid" aria-hidden="true"></div>
+          <div id="brush-cursor" class="brush-cursor" aria-hidden="true" hidden>
+            <span class="brush-cursor-center"></span>
+          </div>
           <div id="canvas-placeholder" class="canvas-placeholder" aria-hidden="true">
             Viết biểu thức toán học vào đây...
           </div>
@@ -299,6 +302,10 @@
           </button>
         </div>
       </footer>
+      <div class="hp-trap" aria-hidden="true">
+        <label for="website-hp">Website</label>
+        <input type="text" id="website-hp" name="website_hp" tabindex="-1" autocomplete="off">
+      </div>
     </main>
 
     <p class="shortcut-hint">

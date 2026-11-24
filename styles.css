@@ -555,6 +555,48 @@ code {
   -webkit-user-select: none;
 }
 
+.canvas-stage.has-custom-cursor #drawing-canvas {
+  cursor: none;
+}
+
+.brush-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 5;
+  border-radius: 50%;
+  border: 1.5px solid #111111;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform;
+}
+
+.brush-cursor.is-eraser {
+  border: 1.5px dashed #4b5563;
+  background-color: rgba(255, 255, 255, 0.65);
+}
+
+.brush-cursor-center {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background-color: #111111;
+  flex-shrink: 0;
+}
+
+.hp-trap {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .canvas-grid {
   position: absolute;
   inset: 0;
