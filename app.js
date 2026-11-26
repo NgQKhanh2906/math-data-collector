@@ -1,6 +1,6 @@
 /**
- * Logic bảng vẽ chữ viết tay, con trỏ đầu bút trực quan, kiểm lọc chống spam
- * và gửi dữ liệu PNG nền trắng chuẩn lên Google Apps Script.
+ * Logic bảng vẽ chữ viết tay, phân khu bổ sung data thiếu, đồng bộ tiến độ Sheet,
+ * con trỏ đầu bút trực quan, lọc chống spam và gửi PNG nền trắng chuẩn lên Apps Script.
  */
 (function () {
   'use strict';
@@ -18,20 +18,52 @@
   var MIN_BBOX_WIDTH = Number(config.MIN_BBOX_WIDTH) || 28;
   var MIN_BBOX_HEIGHT = Number(config.MIN_BBOX_HEIGHT) || 16;
   var MAX_INK_COVERAGE_RATIO = Number(config.MAX_INK_COVERAGE_RATIO) || 0.35;
+  var EDGE_MARGIN_PX = Number(config.EDGE_MARGIN_PX) || 18;
+  var SESSION_GOAL = Number(config.SESSION_GOAL) || 10;
 
+  var DEFICIT_TARGETS = config.DEFICIT_TARGETS || {
+    div_colon: { label: 'Chia :', target: 50, baseCount: 1 },
+    mul_implicit: { label: 'Nhân liền (a)b', target: 45, baseCount: 6 },
+    pow_caret: { label: 'Mũ ^', target: 45, baseCount: 6 },
+    mul_dot: { label: 'Nhân chấm ·', target: 35, baseCount: 18 }
+  };
+
+  var VALID_COLORS = ['#111111', '#1D4ED8', '#DC2626'];
   var SESSION_STORAGE_KEY = 'math_ink_session_count';
   var CLIENT_ID_STORAGE_KEY = 'math_ink_client_id';
+  var PREFS_STORAGE_KEY = 'math_ink_prefs_v1';
 
   var configWarningEl = document.getElementById('config-warning');
   var sessionCountEl = document.getElementById('session-count');
+  var sessionGoalTargetEl = document.getElementById('session-goal-target');
+  var sessionProgressFillEl = document.getElementById('session-progress-fill');
+
+  var modeDeficitBtn = document.getElementById('mode-deficit');
   var modePromptBtn = document.getElementById('mode-prompt');
   var modeFreeBtn = document.getElementById('mode-free');
+
+  var deficitPanelEl = document.getElementById('deficit-panel');
   var promptPanelEl = document.getElementById('prompt-panel');
   var freePanelEl = document.getElementById('free-panel');
+
+  var deficitFilterButtons = Array.prototype.slice.call(document.querySelectorAll('.deficit-filter-btn'));
+  var countDivColonEl = document.getElementById('count-div_colon');
+  var countMulImplicitEl = document.getElementById('count-mul_implicit');
+  var countPowCaretEl = document.getElementById('count-pow_caret');
+  var countMulDotEl = document.getElementById('count-mul_dot');
+  var liveSyncStatusEl = document.getElementById('live-sync-status');
+  var deficitActiveTagEl = document.getElementById('deficit-active-tag');
+  var deficitPromptDisplayEl = document.getElementById('deficit-prompt-display');
+  var btnNextDeficit = document.getElementById('btn-next-deficit');
+  var deficitRuleHintEl = document.getElementById('deficit-rule-hint');
+  var deficitCanonicalPreviewEl = document.getElementById('deficit-canonical-preview');
+
   var promptCategoryEl = document.getElementById('prompt-category');
   var promptDisplayEl = document.getElementById('prompt-display');
   var btnNextPrompt = document.getElementById('btn-next-prompt');
+
   var freeLabelInput = document.getElementById('free-label-input');
+  var freeStyleTagEl = document.getElementById('free-style-tag');
   var allowEmptyLabelCheckbox = document.getElementById('allow-empty-label');
   var quickSymbolButtons = Array.prototype.slice.call(document.querySelectorAll('.quick-symbol-btn'));
 
@@ -46,12 +78,14 @@
   var btnUndo = document.getElementById('btn-undo');
   var btnRedo = document.getElementById('btn-redo');
   var btnToggleGrid = document.getElementById('btn-toggle-grid');
+  var btnStylusOnly = document.getElementById('btn-stylus-only');
   var btnClear = document.getElementById('btn-clear');
 
   var canvasStageEl = document.getElementById('canvas-stage');
   var canvasEl = document.getElementById('drawing-canvas');
   var brushCursorEl = document.getElementById('brush-cursor');
   var brushCursorCenterEl = brushCursorEl ? brushCursorEl.querySelector('.brush-cursor-center') : null;
+  var edgeWarningPillEl = document.getElementById('edge-warning-pill');
   var canvasPlaceholderEl = document.getElementById('canvas-placeholder');
   var strokeCounterEl = document.getElementById('stroke-counter');
 
@@ -64,13 +98,34 @@
   var ctx = canvasEl.getContext('2d');
 
   var state = {
-    mode: 'prompt',
+    mode: 'deficit',
+    deficitFilter: 'auto',
+    currentDeficitItem: {
+      display: '144 : 12',
+      canonical: '144 / 12',
+      styleTag: 'div_colon',
+      highlightToken: ':',
+      ruleHint: 'Viết rõ dấu hai chấm : (không viết dấu / hay gạch phân số).'
+    },
     category: 'mixed',
-    currentPrompt: '',
+    currentGeneralItem: {
+      display: '47 + 86',
+      canonical: '47 + 86',
+      styleTag: 'general_basic',
+      highlightToken: '',
+      ruleHint: ''
+    },
+    sheetCounts: {
+      div_colon: 0,
+      mul_implicit: 0,
+      pow_caret: 0,
+      mul_dot: 0
+    },
     penColor: config.DEFAULT_PEN_COLOR || '#111111',
     penSize: Number(config.DEFAULT_PEN_SIZE) || 6,
     tool: 'pen',
     showGrid: false,
+    stylusOnly: false,
     strokes: [],
     redoStack: [],
     currentStroke: null,
@@ -94,6 +149,46 @@
       url.indexOf('https://') === 0 &&
       url.indexOf('PASTE_YOUR_GOOGLE_APPS_SCRIPT') === -1
     );
+  }
+
+  function loadPrefs() {
+    try {
+      var raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      var parsed = JSON.parse(raw);
+      if (parsed && VALID_COLORS.indexOf(parsed.penColor) !== -1) {
+        state.penColor = parsed.penColor;
+      }
+      if (parsed && typeof parsed.penSize === 'number' && parsed.penSize >= 2 && parsed.penSize <= 24) {
+        state.penSize = Math.round(parsed.penSize);
+      }
+      if (parsed && typeof parsed.showGrid === 'boolean') {
+        state.showGrid = parsed.showGrid;
+      }
+      if (parsed && typeof parsed.stylusOnly === 'boolean') {
+        state.stylusOnly = parsed.stylusOnly;
+      }
+    } catch (err) {
+      // Bỏ qua khi không đọc được localStorage
+    }
+  }
+
+  function savePrefs() {
+    try {
+      window.localStorage.setItem(
+        PREFS_STORAGE_KEY,
+        JSON.stringify({
+          penColor: state.penColor,
+          penSize: state.penSize,
+          showGrid: state.showGrid,
+          stylusOnly: state.stylusOnly
+        })
+      );
+    } catch (err) {
+      // Bỏ qua khi trình duyệt chặn localStorage
+    }
   }
 
   function loadOrCreateClientId() {
@@ -124,6 +219,18 @@
     }
   }
 
+  function updateSessionProgressUi() {
+    sessionCountEl.textContent = String(state.sessionCount);
+    if (sessionGoalTargetEl) {
+      sessionGoalTargetEl.textContent = String(SESSION_GOAL);
+    }
+    if (sessionProgressFillEl) {
+      var pct = Math.min(100, Math.round((state.sessionCount / SESSION_GOAL) * 100));
+      sessionProgressFillEl.style.width = pct + '%';
+      sessionProgressFillEl.classList.toggle('is-complete', state.sessionCount >= SESSION_GOAL);
+    }
+  }
+
   function loadSessionCount() {
     try {
       var raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
@@ -134,7 +241,7 @@
     } catch (err) {
       state.sessionCount = 0;
     }
-    sessionCountEl.textContent = String(state.sessionCount);
+    updateSessionProgressUi();
   }
 
   function saveSessionCount() {
@@ -143,7 +250,7 @@
     } catch (err) {
       // Bỏ qua khi trình duyệt chặn localStorage
     }
-    sessionCountEl.textContent = String(state.sessionCount);
+    updateSessionProgressUi();
   }
 
   function showToast(message, type) {
@@ -158,6 +265,154 @@
         toast.parentNode.removeChild(toast);
       }
     }, 4200);
+  }
+
+  function getCombinedDeficitCounts() {
+    return {
+      div_colon: (DEFICIT_TARGETS.div_colon.baseCount || 0) + (state.sheetCounts.div_colon || 0),
+      mul_implicit: (DEFICIT_TARGETS.mul_implicit.baseCount || 0) + (state.sheetCounts.mul_implicit || 0),
+      pow_caret: (DEFICIT_TARGETS.pow_caret.baseCount || 0) + (state.sheetCounts.pow_caret || 0),
+      mul_dot: (DEFICIT_TARGETS.mul_dot.baseCount || 0) + (state.sheetCounts.mul_dot || 0)
+    };
+  }
+
+  function updateDeficitCountBadges() {
+    var combined = getCombinedDeficitCounts();
+    var countElements = {
+      div_colon: countDivColonEl,
+      mul_implicit: countMulImplicitEl,
+      pow_caret: countPowCaretEl,
+      mul_dot: countMulDotEl
+    };
+
+    Object.keys(countElements).forEach(function (key) {
+      var countEl = countElements[key];
+      var target = DEFICIT_TARGETS[key] ? DEFICIT_TARGETS[key].target : 40;
+      var current = combined[key] || 0;
+      if (countEl) {
+        countEl.textContent = current + '/' + target;
+      }
+      var parentBtn = countEl ? countEl.closest('.deficit-filter-btn') : null;
+      if (parentBtn) {
+        parentBtn.classList.toggle('is-target-met', current >= target);
+      }
+    });
+  }
+
+  function fetchLiveDeficitStats() {
+    var appsScriptUrl = config.APPS_SCRIPT_URL;
+    if (!isValidAppsScriptUrl(appsScriptUrl)) {
+      if (liveSyncStatusEl) {
+        liveSyncStatusEl.textContent = 'Chế độ offline';
+      }
+      return;
+    }
+
+    if (liveSyncStatusEl) {
+      liveSyncStatusEl.textContent = 'Đang đồng bộ...';
+    }
+
+    var statsUrl =
+      appsScriptUrl + (appsScriptUrl.indexOf('?') === -1 ? '?' : '&') + 'action=stats';
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timeoutId = null;
+    if (controller) {
+      timeoutId = window.setTimeout(function () {
+        controller.abort();
+      }, 8000);
+    }
+
+    fetch(statsUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller ? controller.signal : undefined
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status);
+        }
+        return response.text();
+      })
+      .then(function (rawText) {
+        var data = JSON.parse(rawText);
+        if (data && data.success === true && data.counts) {
+          state.sheetCounts.div_colon = Number(data.counts.div_colon) || 0;
+          state.sheetCounts.mul_implicit = Number(data.counts.mul_implicit) || 0;
+          state.sheetCounts.pow_caret = Number(data.counts.pow_caret) || 0;
+          state.sheetCounts.mul_dot = Number(data.counts.mul_dot) || 0;
+          updateDeficitCountBadges();
+          if (liveSyncStatusEl) {
+            liveSyncStatusEl.textContent = 'Đã đồng bộ Drive';
+          }
+        } else if (liveSyncStatusEl) {
+          liveSyncStatusEl.textContent = 'Dùng số liệu mặc định';
+        }
+      })
+      .catch(function () {
+        if (liveSyncStatusEl) {
+          liveSyncStatusEl.textContent = 'Dùng số liệu mặc định';
+        }
+      })
+      .finally(function () {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+        }
+      });
+  }
+
+  function appendHighlightSpan(containerEl, text) {
+    var span = document.createElement('span');
+    span.className = 'prompt-op-highlight';
+    span.textContent = text;
+    containerEl.appendChild(span);
+  }
+
+  function renderHighlightedExpression(containerEl, displayText, highlightToken) {
+    containerEl.textContent = '';
+
+    if (!highlightToken) {
+      containerEl.textContent = displayText;
+      return;
+    }
+
+    if (highlightToken === 'implicit') {
+      var buffer = '';
+      var i = 0;
+      while (i < displayText.length) {
+        var ch = displayText.charAt(i);
+        var next = i + 1 < displayText.length ? displayText.charAt(i + 1) : '';
+        var isImplicitPair =
+          (ch === ')' && next === '(') ||
+          (ch === ')' && /[0-9]/.test(next)) ||
+          (/[0-9]/.test(ch) && next === '(');
+
+        if (isImplicitPair) {
+          if (buffer) {
+            containerEl.appendChild(document.createTextNode(buffer));
+            buffer = '';
+          }
+          appendHighlightSpan(containerEl, ch + next);
+          i += 2;
+        } else {
+          buffer += ch;
+          i += 1;
+        }
+      }
+      if (buffer) {
+        containerEl.appendChild(document.createTextNode(buffer));
+      }
+      return;
+    }
+
+    var parts = displayText.split(highlightToken);
+    for (var p = 0; p < parts.length; p += 1) {
+      if (parts[p]) {
+        containerEl.appendChild(document.createTextNode(parts[p]));
+      }
+      if (p < parts.length - 1) {
+        appendHighlightSpan(containerEl, highlightToken);
+      }
+    }
   }
 
   function getLogicalPoint(clientX, clientY) {
@@ -419,6 +674,34 @@
     return colors;
   }
 
+  function checkEdgeClipping() {
+    if (!edgeWarningPillEl) {
+      return;
+    }
+
+    var penStrokes = getPenStrokes();
+    var isNearEdge = false;
+
+    for (var i = 0; i < penStrokes.length && !isNearEdge; i += 1) {
+      var pts = penStrokes[i].points;
+      for (var j = 0; j < pts.length; j += 1) {
+        var pt = pts[j];
+        if (
+          pt.x < EDGE_MARGIN_PX ||
+          pt.x > EXPORT_WIDTH - EDGE_MARGIN_PX ||
+          pt.y < EDGE_MARGIN_PX ||
+          pt.y > EXPORT_HEIGHT - EDGE_MARGIN_PX
+        ) {
+          isNearEdge = true;
+          break;
+        }
+      }
+    }
+
+    edgeWarningPillEl.hidden = !isNearEdge;
+    canvasStageEl.classList.toggle('has-edge-warning', isNearEdge);
+  }
+
   function validateDrawingQuality(penStrokes) {
     if (penStrokes.length < MIN_PEN_STROKES) {
       return {
@@ -538,7 +821,21 @@
     syncBrushCursorAppearance();
   }
 
-  function setPenColor(color) {
+  function applyGridUi() {
+    canvasStageEl.classList.toggle('has-grid', state.showGrid);
+    btnToggleGrid.classList.toggle('is-active', state.showGrid);
+    btnToggleGrid.setAttribute('aria-pressed', state.showGrid ? 'true' : 'false');
+  }
+
+  function applyStylusOnlyUi() {
+    if (!btnStylusOnly) {
+      return;
+    }
+    btnStylusOnly.classList.toggle('is-active', state.stylusOnly);
+    btnStylusOnly.setAttribute('aria-pressed', state.stylusOnly ? 'true' : 'false');
+  }
+
+  function setPenColor(color, persist) {
     state.penColor = color;
     state.tool = 'pen';
 
@@ -550,6 +847,9 @@
 
     updateToolButtons();
     updatePenPreview();
+    if (persist) {
+      savePrefs();
+    }
   }
 
   function setTool(toolName) {
@@ -570,36 +870,93 @@
     syncBrushCursorAppearance();
   }
 
-  function setPenSize(sizeValue) {
+  function setPenSize(sizeValue, persist) {
     var clamped = Math.max(2, Math.min(24, Number(sizeValue) || 6));
     state.penSize = clamped;
     updatePenPreview();
+    if (persist) {
+      savePrefs();
+    }
   }
 
   function setMode(nextMode) {
     state.mode = nextMode;
+    var isDeficit = nextMode === 'deficit';
     var isPrompt = nextMode === 'prompt';
+    var isFree = nextMode === 'free';
+
+    modeDeficitBtn.classList.toggle('is-active', isDeficit);
+    modeDeficitBtn.setAttribute('aria-selected', isDeficit ? 'true' : 'false');
 
     modePromptBtn.classList.toggle('is-active', isPrompt);
     modePromptBtn.setAttribute('aria-selected', isPrompt ? 'true' : 'false');
 
-    modeFreeBtn.classList.toggle('is-active', !isPrompt);
-    modeFreeBtn.setAttribute('aria-selected', !isPrompt ? 'true' : 'false');
+    modeFreeBtn.classList.toggle('is-active', isFree);
+    modeFreeBtn.setAttribute('aria-selected', isFree ? 'true' : 'false');
 
+    deficitPanelEl.hidden = !isDeficit;
     promptPanelEl.hidden = !isPrompt;
-    freePanelEl.hidden = isPrompt;
+    freePanelEl.hidden = !isFree;
 
-    if (!isPrompt) {
+    if (isFree) {
       freeLabelInput.focus();
     }
   }
 
-  function loadNextPrompt() {
-    if (!promptGenerator || typeof promptGenerator.generate !== 'function') {
+  function setDeficitFilter(filterType) {
+    state.deficitFilter = filterType || 'auto';
+    deficitFilterButtons.forEach(function (btn) {
+      var isMatch = btn.getAttribute('data-deficit') === state.deficitFilter;
+      btn.classList.toggle('is-active', isMatch);
+      btn.setAttribute('aria-pressed', isMatch ? 'true' : 'false');
+    });
+    loadNextDeficitPrompt();
+  }
+
+  function loadNextDeficitPrompt() {
+    if (!promptGenerator || typeof promptGenerator.generateDeficit !== 'function') {
       return;
     }
-    state.currentPrompt = promptGenerator.generate(state.category);
-    promptDisplayEl.textContent = state.currentPrompt;
+
+    var item = promptGenerator.generateDeficit(
+      state.deficitFilter,
+      getCombinedDeficitCounts(),
+      DEFICIT_TARGETS
+    );
+    state.currentDeficitItem = item;
+
+    var targetCfg = DEFICIT_TARGETS[item.styleTag];
+    if (deficitActiveTagEl) {
+      deficitActiveTagEl.textContent = targetCfg ? targetCfg.label : item.styleTag;
+    }
+
+    renderHighlightedExpression(deficitPromptDisplayEl, item.display, item.highlightToken);
+
+    if (deficitRuleHintEl) {
+      deficitRuleHintEl.textContent = item.ruleHint;
+    }
+    if (deficitCanonicalPreviewEl) {
+      deficitCanonicalPreviewEl.textContent = item.canonical;
+    }
+  }
+
+  function loadNextPrompt() {
+    if (!promptGenerator) {
+      return;
+    }
+    if (typeof promptGenerator.generateGeneral === 'function') {
+      state.currentGeneralItem = promptGenerator.generateGeneral(state.category);
+    } else if (typeof promptGenerator.generate === 'function') {
+      var text = promptGenerator.generate(state.category);
+      state.currentGeneralItem = {
+        display: text,
+        canonical: text,
+        styleTag: 'general_' + state.category,
+        highlightToken: '',
+        ruleHint: ''
+      };
+    }
+    promptDisplayEl.textContent = state.currentGeneralItem.display;
   }
 
   function handleUndo() {
@@ -609,6 +966,7 @@
     var popped = state.strokes.pop();
     state.redoStack.push(popped);
     renderCanvas();
+    checkEdgeClipping();
     updateUiState();
   }
 
@@ -619,6 +977,7 @@
     var restored = state.redoStack.pop();
     state.strokes.push(restored);
     renderCanvas();
+    checkEdgeClipping();
     updateUiState();
   }
 
@@ -629,6 +988,7 @@
     state.totalDrawDurationMs = 0;
     state.strokeStartTime = 0;
     renderCanvas();
+    checkEdgeClipping();
     updateUiState();
   }
 
@@ -720,10 +1080,22 @@
     }
 
     var label = '';
-    if (state.mode === 'prompt') {
-      label = state.currentPrompt;
+    var displayExpr = '';
+    var styleTag = '';
+
+    if (state.mode === 'deficit') {
+      label = state.currentDeficitItem.canonical;
+      displayExpr = state.currentDeficitItem.display;
+      styleTag = state.currentDeficitItem.styleTag;
+    } else if (state.mode === 'prompt') {
+      label = state.currentGeneralItem.canonical;
+      displayExpr = state.currentGeneralItem.display;
+      styleTag = state.currentGeneralItem.styleTag;
     } else {
       label = freeLabelInput.value.trim();
+      displayExpr = label;
+      styleTag = freeStyleTagEl ? freeStyleTagEl.value : 'free';
+
       if (!label && !allowEmptyLabelCheckbox.checked) {
         showToast('Vui lòng nhập nhãn biểu thức tương ứng hoặc tích "Lưu không cần nhãn".', 'error');
         freeLabelInput.focus();
@@ -735,7 +1107,10 @@
           freeLabelInput.focus();
           return;
         }
-        if (!/^[0-9a-zA-Z+\-*/^=().,\s<>[\]{}|\\]+$/.test(label) || !/[0-9+\-*/^=()]/.test(label)) {
+        if (
+          !/^[0-9a-zA-Z+\-*/^=().,:\u00B7\s<>[\]{}|\\]+$/.test(label) ||
+          !/[0-9+\-*/^=():\u00B7]/.test(label)
+        ) {
           showToast('Nhãn biểu thức chứa ký tự không hợp lệ hoặc không phải biểu thức toán học.', 'error');
           freeLabelInput.focus();
           return;
@@ -745,7 +1120,7 @@
 
     var appsScriptUrl = config.APPS_SCRIPT_URL;
     if (!isValidAppsScriptUrl(appsScriptUrl)) {
-      showToast('Chưa cấu hình APPS_SCRIPT_URL trong config.js. Bạn có thể dùng "Tải ảnh PNG" để thử nghiệm.', 'error');
+      showToast('Chưa cấu hình APPS_SCRIPT_URL trong config.js. Bạn có thể dùng "Tải PNG" để thử nghiệm.', 'error');
       return;
     }
 
@@ -761,6 +1136,8 @@
       clientId: state.clientId,
       imageBase64: imageBase64,
       label: label,
+      displayExpr: displayExpr,
+      styleTag: styleTag,
       mode: state.mode,
       penColorsUsed: getPenColorsUsed(penStrokes),
       strokeCount: penStrokes.length,
@@ -810,11 +1187,19 @@
 
         state.sessionCount += 1;
         saveSessionCount();
+
+        if (Object.prototype.hasOwnProperty.call(state.sheetCounts, styleTag)) {
+          state.sheetCounts[styleTag] += 1;
+          updateDeficitCountBadges();
+        }
+
         showToast('Đã lưu lên Drive: ' + (result.fileName || 'thanh cong'), 'success');
 
         clearBoard();
         startSubmitCooldown();
-        if (state.mode === 'prompt') {
+        if (state.mode === 'deficit') {
+          loadNextDeficitPrompt();
+        } else if (state.mode === 'prompt') {
           loadNextPrompt();
         } else {
           freeLabelInput.value = '';
@@ -838,6 +1223,10 @@
   }
 
   function handlePointerDown(e) {
+    if (state.stylusOnly && e.pointerType === 'touch') {
+      return;
+    }
+
     updateBrushCursorFromEvent(e);
 
     if (state.isUploading) {
@@ -926,6 +1315,7 @@
     state.activePointerId = null;
 
     renderCanvas();
+    checkEdgeClipping();
     updateUiState();
   }
 
@@ -980,18 +1370,37 @@
       return;
     }
 
-    if (e.key === '1') {
-      setPenColor('#111111');
+    if (e.key === 'Escape') {
+      if (state.strokes.length > 0 && !state.isUploading) {
+        clearBoard();
+        showToast('Đã xóa sạch bảng vẽ.', 'info');
+      }
+      return;
+    }
+
+    var lowerKey = e.key.toLowerCase();
+    if (lowerKey === 'n') {
+      if (state.mode === 'deficit') {
+        loadNextDeficitPrompt();
+      } else if (state.mode === 'prompt') {
+        loadNextPrompt();
+      }
+    } else if (e.key === '1') {
+      setPenColor('#111111', true);
     } else if (e.key === '2') {
-      setPenColor('#1D4ED8');
+      setPenColor('#1D4ED8', true);
     } else if (e.key === '3') {
-      setPenColor('#DC2626');
-    } else if (e.key.toLowerCase() === 'e') {
+      setPenColor('#DC2626', true);
+    } else if (lowerKey === 'e') {
       setTool(state.tool === 'eraser' ? 'pen' : 'eraser');
     }
   }
 
   function bindEvents() {
+    modeDeficitBtn.addEventListener('click', function () {
+      setMode('deficit');
+    });
+
     modePromptBtn.addEventListener('click', function () {
       setMode('prompt');
     });
@@ -999,6 +1408,14 @@
     modeFreeBtn.addEventListener('click', function () {
       setMode('free');
     });
+
+    deficitFilterButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        setDeficitFilter(btn.getAttribute('data-deficit'));
+      });
+    });
+
+    btnNextDeficit.addEventListener('click', loadNextDeficitPrompt);
 
     promptCategoryEl.addEventListener('change', function () {
       state.category = promptCategoryEl.value;
@@ -1015,7 +1432,7 @@
 
     colorButtons.forEach(function (btn) {
       btn.addEventListener('click', function () {
-        setPenColor(btn.getAttribute('data-color') || '#111111');
+        setPenColor(btn.getAttribute('data-color') || '#111111', true);
       });
     });
 
@@ -1028,12 +1445,12 @@
     });
 
     penSizeSlider.addEventListener('input', function () {
-      setPenSize(penSizeSlider.value);
+      setPenSize(penSizeSlider.value, true);
     });
 
     sizePresetButtons.forEach(function (btn) {
       btn.addEventListener('click', function () {
-        setPenSize(btn.getAttribute('data-size'));
+        setPenSize(btn.getAttribute('data-size'), true);
       });
     });
 
@@ -1042,10 +1459,23 @@
 
     btnToggleGrid.addEventListener('click', function () {
       state.showGrid = !state.showGrid;
-      canvasStageEl.classList.toggle('has-grid', state.showGrid);
-      btnToggleGrid.classList.toggle('is-active', state.showGrid);
-      btnToggleGrid.setAttribute('aria-pressed', state.showGrid ? 'true' : 'false');
+      applyGridUi();
+      savePrefs();
     });
+
+    if (btnStylusOnly) {
+      btnStylusOnly.addEventListener('click', function () {
+        state.stylusOnly = !state.stylusOnly;
+        applyStylusOnlyUi();
+        savePrefs();
+        showToast(
+          state.stylusOnly
+            ? 'Đã bật Chỉ nhận bút: chặn chạm tay khi viết bằng bút cảm ứng.'
+            : 'Đã tắt Chỉ nhận bút: cho phép vẽ bằng cả ngón tay và bút.',
+          'info'
+        );
+      });
+    }
 
     btnClear.addEventListener('click', function () {
       if (state.strokes.length === 0 || state.isUploading) {
@@ -1081,15 +1511,21 @@
 
   function init() {
     configWarningEl.hidden = isValidAppsScriptUrl(config.APPS_SCRIPT_URL);
+    loadPrefs();
     loadOrCreateClientId();
     loadSessionCount();
+    applyGridUi();
+    applyStylusOnlyUi();
+    updateDeficitCountBadges();
+    loadNextDeficitPrompt();
     loadNextPrompt();
-    setPenColor(state.penColor);
-    setPenSize(state.penSize);
-    setMode('prompt');
+    setPenColor(state.penColor, false);
+    setPenSize(state.penSize, false);
+    setMode('deficit');
     bindEvents();
     resizeCanvas();
     updateUiState();
+    fetchLiveDeficitStats();
   }
 
   init();
