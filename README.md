@@ -6,10 +6,14 @@
 
 - **Bảng vẽ nền trắng chuẩn dữ liệu train AI:** Hỗ trợ 3 màu mực bắt buộc (Đen `#111111`, Xanh biển `#1D4ED8`, Đỏ `#DC2626`), tùy chỉnh cỡ ngòi từ `2 px` đến `24 px` kèm 3 mức nhanh (`Mảnh 3px`, `Vừa 6px`, `Đậm 12px`).
 - **Công cụ chỉnh sửa đầy đủ:** Bút viết, Tẩy nét, Hoàn tác (`Ctrl+Z`), Làm lại (`Ctrl+Y`), Dòng kẻ căn chữ (chỉ hiển thị khi vẽ, không dính vào ảnh xuất), Xóa bảng.
-- **2 chế độ thu thập nhãn (Ground Truth):**
-  - **Đề bài gợi ý:** Tự động sinh biểu thức đa dạng (cơ bản `+ - * /`, số thập phân, ngoặc đơn, lũy thừa, căn bậc hai, phương trình bậc 1/2) để người dùng chép lại, đảm bảo nhãn sạch 100%.
-  - **Viết tự do:** Người dùng tự viết biểu thức bất kỳ và nhập nhãn tương ứng (có nút chèn nhanh ký tự toán học hoặc tùy chọn lưu tạm không nhãn để gán sau).
-- **Đồng bộ Google Drive & Google Sheet:** Tự động lưu từng ảnh `math_YYYYMMDD_HHmmss_<id>.png` vào thư mục Google Drive và ghi thêm 1 dòng log vào Google Sheet `Math_Dataset_Labels` (xử lý an toàn các nhãn bắt đầu bằng `=`, `+`, `-`, kèm cột `status` mặc định `PENDING` để bạn duyệt dữ liệu trước khi train AI).
+- **3 chế độ thu thập nhãn (Ground Truth):**
+  - **Bổ sung data thiếu (Mặc định):** Tập trung vào 4 nhóm phép toán đang thiếu dữ liệu gồm Chia `:`, Nhân viết liền `(a)b`, Mũ `^` và Nhân chấm `·`. Tự động đồng bộ tiến độ thực tế từ Google Sheet để ưu tiên sinh đề cho nhóm ít nhất, hiển thị quy tắc đặt nét, tô nhấn ký hiệu mục tiêu và lưu cột `label` theo phép toán chuẩn hóa (`/`, `*`, `^`).
+  - **Đề tổng hợp:** Tự động sinh biểu thức đa dạng (cơ bản `+ - * /`, số thập phân, ngoặc đơn, lũy thừa, căn bậc hai, phương trình bậc 1/2).
+  - **Viết tự do:** Người dùng tự viết biểu thức bất kỳ, chọn phân loại kiểu viết (`style_tag`), nhập nhãn tương ứng hoặc tích lưu tạm để gán nhãn sau.
+- **Tối ưu thao tác viết & bảo vệ dữ liệu:**
+  - Giao diện gọn trong 1 khung màn hình, thanh tiến độ phiên (`10 mẫu`), tự lưu cài đặt màu mực/cỡ bút/dòng kẻ/chế độ bút vào trình duyệt, phím tắt nhanh (`Ctrl+Enter` gửi, `Esc` xóa bảng, `N` đổi đề).
+  - Hỗ trợ chế độ **Chỉ nhận bút (Palm Rejection)** chặn chạm ngón tay khi viết bằng bút cảm ứng và cảnh báo khi nét viết quá sát mép bảng (`< 18 px`).
+- **Đồng bộ Google Drive & Google Sheet:** Tự động lưu từng ảnh `math_YYYYMMDD_HHmmss_<id>.png` vào thư mục Google Drive và ghi thêm 1 dòng log vào Google Sheet `Math_Dataset_Labels` (gồm 14 cột có `status`, `style_tag`, `display_expr`, và cột `preview` công thức `=IMAGE(...)` để duyệt ảnh trực tiếp trên Sheet). *(Lưu ý: để cột `preview` tải được ảnh thu nhỏ trong Google Sheet, hãy bật quyền chia sẻ thư mục Drive ở chế độ "Bất kỳ ai có đường liên kết -> Người xem").*
 - **Hỗ trợ bảng vẽ điện tử & chống spam 2 lớp:**
   - Hiển thị vòng tròn con trỏ đầu bút bám theo chuột và bút bảng vẽ điện tử (`pointerType === 'pen'`) ngay cả khi rê lơ lửng (hover) trên bảng.
   - Chặn dữ liệu vô nghĩa và spam bằng tool ở cả Frontend (tối thiểu 2 nét, kiểm tra độ dài nét, diện tích phủ mực, thời gian vẽ, cooldown 4 giây, honeypot) và Google Apps Script Backend (giới hạn 6 mẫu/phút mỗi client và 35 mẫu/phút toàn hệ thống, kiểm tra header PNG `1200 x 500`, chặn trùng ảnh SHA-256).

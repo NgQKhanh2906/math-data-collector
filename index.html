@@ -14,7 +14,7 @@
           <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
         </svg>
         <p>
-          Chưa gắn URL Google Apps Script trong <code>config.js</code>. Bạn vẫn có thể vẽ và dùng nút <strong>Tải ảnh PNG</strong> về máy; để gửi trực tiếp lên Google Drive, hãy dán URL Web App vào <code>APPS_SCRIPT_URL</code>.
+          Chưa gắn URL Google Apps Script trong <code>config.js</code>. Bạn vẫn có thể vẽ và dùng nút <strong>Tải PNG</strong> về máy; để gửi trực tiếp lên Google Drive, hãy dán URL Web App vào <code>APPS_SCRIPT_URL</code>.
         </p>
       </div>
     </div>
@@ -22,41 +22,127 @@
     <header class="app-header">
       <div class="brand-block">
         <h1>Math Ink Collector</h1>
-        <p class="subtitle">Viết biểu thức toán học lên bảng trắng để thu thập dữ liệu train AI nhận diện công thức.</p>
       </div>
 
-      <div class="header-controls">
-        <div class="session-badge" aria-live="polite">
-          <span>Đã gửi:</span>
-          <strong id="session-count">0</strong>
-          <span>mẫu</span>
-        </div>
+      <div class="mode-switch" role="tablist" aria-label="Chế độ thu thập dữ liệu">
+        <button
+          type="button"
+          id="mode-deficit"
+          class="mode-btn is-active"
+          role="tab"
+          aria-selected="true"
+        >
+          <span class="priority-dot" aria-hidden="true"></span>
+          <span>Bổ sung data thiếu</span>
+        </button>
+        <button
+          type="button"
+          id="mode-prompt"
+          class="mode-btn"
+          role="tab"
+          aria-selected="false"
+        >
+          Đề tổng hợp
+        </button>
+        <button
+          type="button"
+          id="mode-free"
+          class="mode-btn"
+          role="tab"
+          aria-selected="false"
+        >
+          Viết tự do
+        </button>
+      </div>
 
-        <div class="mode-switch" role="tablist" aria-label="Chế độ nhập liệu">
-          <button
-            type="button"
-            id="mode-prompt"
-            class="mode-btn is-active"
-            role="tab"
-            aria-selected="true"
-          >
-            Đề bài gợi ý
-          </button>
-          <button
-            type="button"
-            id="mode-free"
-            class="mode-btn"
-            role="tab"
-            aria-selected="false"
-          >
-            Viết tự do
-          </button>
+      <div class="session-progress" aria-live="polite" title="Số mẫu bạn đã gửi thành công trong phiên">
+        <div class="session-progress-text">
+          <span>Phiên này:</span>
+          <strong><span id="session-count">0</span>/<span id="session-goal-target">10</span></strong>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <div id="session-progress-fill" class="progress-fill"></div>
         </div>
       </div>
     </header>
 
     <main class="workspace-card">
-      <section id="prompt-panel" class="expression-panel" aria-label="Đề bài gợi ý">
+      <section id="deficit-panel" class="expression-panel deficit-panel" aria-label="Bổ sung dữ liệu còn thiếu">
+        <div class="deficit-filter-row">
+          <div class="deficit-filter-pills" role="group" aria-label="Chọn nhóm biểu thức cần bổ sung">
+            <button
+              type="button"
+              class="deficit-filter-btn is-active"
+              data-deficit="auto"
+              aria-pressed="true"
+            >
+              <span>Tự ưu tiên</span>
+            </button>
+            <button
+              type="button"
+              class="deficit-filter-btn"
+              data-deficit="div_colon"
+              aria-pressed="false"
+            >
+              <span>Chia :</span>
+              <span class="deficit-count" id="count-div_colon">1/50</span>
+            </button>
+            <button
+              type="button"
+              class="deficit-filter-btn"
+              data-deficit="mul_implicit"
+              aria-pressed="false"
+            >
+              <span>Nhân liền</span>
+              <span class="deficit-count" id="count-mul_implicit">6/45</span>
+            </button>
+            <button
+              type="button"
+              class="deficit-filter-btn"
+              data-deficit="pow_caret"
+              aria-pressed="false"
+            >
+              <span>Mũ ^</span>
+              <span class="deficit-count" id="count-pow_caret">6/45</span>
+            </button>
+            <button
+              type="button"
+              class="deficit-filter-btn"
+              data-deficit="mul_dot"
+              aria-pressed="false"
+            >
+              <span>Nhân chấm ·</span>
+              <span class="deficit-count" id="count-mul_dot">18/35</span>
+            </button>
+          </div>
+          <span id="live-sync-status" class="sync-status">Đang đồng bộ...</span>
+        </div>
+
+        <div class="deficit-prompt-bar">
+          <span id="deficit-active-tag" class="active-style-badge">Chia :</span>
+          <div id="deficit-prompt-display" class="prompt-display" aria-live="polite">144 : 12</div>
+          <button type="button" id="btn-next-deficit" class="btn btn-secondary btn-compact" title="Đổi đề khác (Phím N)">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M23 4v6h-6M1 20v-6h6"></path>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>Đổi đề (N)</span>
+          </button>
+        </div>
+
+        <div class="deficit-cue-row">
+          <div class="rule-cue">
+            <span class="cue-label">Quy tắc viết:</span>
+            <span id="deficit-rule-hint" class="rule-hint-text">Viết rõ dấu hai chấm : (không viết dấu / hay gạch phân số).</span>
+          </div>
+          <div class="canonical-cue">
+            <span>Nhãn lưu Sheet:</span>
+            <code id="deficit-canonical-preview">144 / 12</code>
+          </div>
+        </div>
+      </section>
+
+      <section id="prompt-panel" class="expression-panel" aria-label="Đề tổng hợp" hidden>
         <div class="panel-row">
           <div class="prompt-meta">
             <label for="prompt-category" class="field-label">Nhóm biểu thức</label>
@@ -74,12 +160,12 @@
           </div>
 
           <div class="prompt-actions">
-            <button type="button" id="btn-next-prompt" class="btn btn-secondary">
+            <button type="button" id="btn-next-prompt" class="btn btn-secondary btn-compact" title="Đổi đề khác (Phím N)">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M23 4v6h-6M1 20v-6h6"></path>
                 <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
               </svg>
-              <span>Đổi đề khác</span>
+              <span>Đổi đề (N)</span>
             </button>
           </div>
         </div>
@@ -87,46 +173,61 @@
 
       <section id="free-panel" class="expression-panel" aria-label="Nhãn biểu thức tự do" hidden>
         <div class="free-panel-grid">
-          <div class="free-input-group">
-            <label for="free-label-input" class="field-label">
-              Nhãn biểu thức bạn vừa viết (Ground Truth)
-            </label>
-            <input
-              type="text"
-              id="free-label-input"
-              class="text-input mono-input"
-              placeholder="Ví dụ: (12 + 8) * 3 - 5"
-              autocomplete="off"
-              spellcheck="false"
-            >
-          </div>
-
-          <div class="quick-symbols" aria-label="Chèn nhanh ký hiệu toán học">
-            <span class="field-label">Chèn nhanh:</span>
-            <div class="symbol-buttons">
-              <button type="button" class="quick-symbol-btn" data-symbol="+">+</button>
-              <button type="button" class="quick-symbol-btn" data-symbol="-">-</button>
-              <button type="button" class="quick-symbol-btn" data-symbol="*">*</button>
-              <button type="button" class="quick-symbol-btn" data-symbol="/">/</button>
-              <button type="button" class="quick-symbol-btn" data-symbol="(">(</button>
-              <button type="button" class="quick-symbol-btn" data-symbol=")">)</button>
-              <button type="button" class="quick-symbol-btn" data-symbol="=">=</button>
-              <button type="button" class="quick-symbol-btn" data-symbol=".">.</button>
-              <button type="button" class="quick-symbol-btn" data-symbol="^">^</button>
-              <button type="button" class="quick-symbol-btn" data-symbol="sqrt()">sqrt()</button>
+          <div class="free-top-row">
+            <div class="free-input-group">
+              <label for="free-label-input" class="field-label">
+                Nhãn biểu thức chuẩn hóa (Ground Truth)
+              </label>
+              <input
+                type="text"
+                id="free-label-input"
+                class="text-input mono-input"
+                placeholder="Ví dụ: (12 + 8) * 3 - 5"
+                autocomplete="off"
+                spellcheck="false"
+              >
+            </div>
+            <div class="free-style-group">
+              <label for="free-style-tag" class="field-label">Phân loại kiểu viết</label>
+              <select id="free-style-tag" class="select-input">
+                <option value="free" selected>Tự do chung</option>
+                <option value="div_colon">Chia :</option>
+                <option value="mul_implicit">Nhân liền (a)b</option>
+                <option value="pow_caret">Mũ ^</option>
+                <option value="mul_dot">Nhân chấm ·</option>
+              </select>
             </div>
           </div>
 
-          <label class="checkbox-row" for="allow-empty-label">
-            <input type="checkbox" id="allow-empty-label">
-            <span>Lưu không cần nhãn - gán nhãn sau</span>
-          </label>
+          <div class="free-bottom-row">
+            <div class="quick-symbols" aria-label="Chèn nhanh ký hiệu toán học">
+              <span class="field-label">Chèn nhanh:</span>
+              <div class="symbol-buttons">
+                <button type="button" class="quick-symbol-btn" data-symbol="+">+</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="-">-</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="*">*</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="/">/</button>
+                <button type="button" class="quick-symbol-btn" data-symbol=":">:</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="·">·</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="(">(</button>
+                <button type="button" class="quick-symbol-btn" data-symbol=")">)</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="=">=</button>
+                <button type="button" class="quick-symbol-btn" data-symbol=".">.</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="^">^</button>
+                <button type="button" class="quick-symbol-btn" data-symbol="sqrt()">sqrt()</button>
+              </div>
+            </div>
+
+            <label class="checkbox-row" for="allow-empty-label">
+              <input type="checkbox" id="allow-empty-label">
+              <span>Lưu không cần nhãn - gán nhãn sau</span>
+            </label>
+          </div>
         </div>
       </section>
 
       <section class="toolbar" aria-label="Thanh công cụ vẽ">
         <div class="toolbar-group" role="group" aria-label="Màu mực">
-          <span class="toolbar-label">Màu mực</span>
           <div class="color-options">
             <button
               type="button"
@@ -148,7 +249,7 @@
               aria-pressed="false"
             >
               <span class="color-swatch swatch-blue"></span>
-              <span>Xanh biển</span>
+              <span>Xanh</span>
             </button>
             <button
               type="button"
@@ -167,7 +268,6 @@
         <div class="toolbar-divider" aria-hidden="true"></div>
 
         <div class="toolbar-group" role="group" aria-label="Công cụ">
-          <span class="toolbar-label">Công cụ</span>
           <div class="tool-options">
             <button
               type="button"
@@ -181,7 +281,7 @@
                 <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
                 <path d="M2 2l7.586 7.586"></path>
               </svg>
-              <span>Bút viết</span>
+              <span>Bút</span>
             </button>
             <button
               type="button"
@@ -202,29 +302,24 @@
         <div class="toolbar-divider" aria-hidden="true"></div>
 
         <div class="toolbar-group size-group" role="group" aria-label="Cỡ ngòi bút">
-          <div class="size-header">
-            <label for="pen-size-slider" class="toolbar-label">Cỡ ngòi</label>
-            <span id="pen-size-value" class="size-value">6 px</span>
+          <div class="pen-preview-box" aria-hidden="true" title="Xem trước cỡ ngòi">
+            <span id="pen-preview-dot" class="pen-preview-dot"></span>
           </div>
-          <div class="size-controls">
-            <div class="pen-preview-box" aria-hidden="true">
-              <span id="pen-preview-dot" class="pen-preview-dot"></span>
-            </div>
-            <input
-              type="range"
-              id="pen-size-slider"
-              class="range-slider"
-              min="2"
-              max="24"
-              step="1"
-              value="6"
-              aria-label="Tùy chỉnh kích cỡ ngòi bút"
-            >
-            <div class="size-presets">
-              <button type="button" class="size-preset-btn" data-size="3">Mảnh 3px</button>
-              <button type="button" class="size-preset-btn is-active" data-size="6">Vừa 6px</button>
-              <button type="button" class="size-preset-btn" data-size="12">Đậm 12px</button>
-            </div>
+          <input
+            type="range"
+            id="pen-size-slider"
+            class="range-slider"
+            min="2"
+            max="24"
+            step="1"
+            value="6"
+            aria-label="Tùy chỉnh kích cỡ ngòi bút"
+          >
+          <span id="pen-size-value" class="size-value">6 px</span>
+          <div class="size-presets">
+            <button type="button" class="size-preset-btn" data-size="3" title="Mảnh 3px">3</button>
+            <button type="button" class="size-preset-btn is-active" data-size="6" title="Vừa 6px">6</button>
+            <button type="button" class="size-preset-btn" data-size="12" title="Đậm 12px">12</button>
           </div>
         </div>
 
@@ -252,7 +347,16 @@
             </svg>
             <span>Dòng kẻ</span>
           </button>
-          <button type="button" id="btn-clear" class="btn btn-utility btn-danger-outline" title="Xóa toàn bộ bảng" disabled>
+          <button type="button" id="btn-stylus-only" class="btn btn-utility" title="Khóa chạm ngón tay khi tì bàn tay viết bằng bút cảm ứng" aria-pressed="false">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"></path>
+              <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v6"></path>
+              <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"></path>
+              <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path>
+            </svg>
+            <span>Chỉ nhận bút</span>
+          </button>
+          <button type="button" id="btn-clear" class="btn btn-utility btn-danger-outline" title="Xóa toàn bộ bảng (Esc)" disabled>
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M3 6h18"></path>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -269,6 +373,9 @@
           <div id="brush-cursor" class="brush-cursor" aria-hidden="true" hidden>
             <span class="brush-cursor-center"></span>
           </div>
+          <div id="edge-warning-pill" class="edge-warning-pill" role="status" hidden>
+            Nét viết đang sát mép bảng, tránh bị cắt chữ
+          </div>
           <div id="canvas-placeholder" class="canvas-placeholder" aria-hidden="true">
             Viết biểu thức toán học vào đây...
           </div>
@@ -277,9 +384,11 @@
 
       <footer class="action-bar">
         <div class="board-info">
-          <span>1200 x 500 px - Nền trắng PNG</span>
+          <span>1200 x 500 px · PNG nền trắng</span>
           <span class="dot-sep" aria-hidden="true">|</span>
           <span id="stroke-counter">0 nét vẽ</span>
+          <span class="dot-sep desktop-only" aria-hidden="true">|</span>
+          <span class="shortcut-inline desktop-only">Ctrl+Enter: Gửi · Esc: Xóa · N: Đổi đề</span>
         </div>
 
         <div class="action-buttons">
@@ -289,7 +398,7 @@
               <polyline points="7 10 12 15 17 10"></polyline>
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
-            <span>Tải ảnh PNG</span>
+            <span>Tải PNG</span>
           </button>
           <button type="button" id="btn-save" class="btn btn-primary" title="Lưu ảnh và gửi dữ liệu (Ctrl+Enter)">
             <span class="btn-spinner" aria-hidden="true"></span>
@@ -302,15 +411,12 @@
           </button>
         </div>
       </footer>
+
       <div class="hp-trap" aria-hidden="true">
         <label for="website-hp">Website</label>
         <input type="text" id="website-hp" name="website_hp" tabindex="-1" autocomplete="off">
       </div>
     </main>
-
-    <p class="shortcut-hint">
-      Phím tắt: <code>Ctrl+Z</code> Hoàn tác, <code>Ctrl+Y</code> Làm lại, <code>1</code> / <code>2</code> / <code>3</code> Đổi màu bút, <code>E</code> Tẩy, <code>Ctrl+Enter</code> Lưu &amp; Gửi.
-    </p>
   </div>
 
   <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>

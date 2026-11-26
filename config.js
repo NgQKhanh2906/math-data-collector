@@ -21,5 +21,13 @@
     MIN_BBOX_WIDTH: 28,
     MIN_BBOX_HEIGHT: 16,
     MAX_INK_COVERAGE_RATIO: 0.35,
+    EDGE_MARGIN_PX: 18,
+    SESSION_GOAL: 10,
+    DEFICIT_TARGETS: Object.freeze({
+      div_colon: Object.freeze({ label: 'Chia :', target: 50, baseCount: 1 }),
+      mul_implicit: Object.freeze({ label: 'Nhân liền (a)b', target: 45, baseCount: 6 }),
+      pow_caret: Object.freeze({ label: 'Mũ ^', target: 45, baseCount: 6 }),
+      mul_dot: Object.freeze({ label: 'Nhân chấm ·', target: 35, baseCount: 18 }),
+    }),
   });
 })(typeof window !== "undefined" ? window : globalThis);
